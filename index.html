@@ -84,8 +84,22 @@
   .cbtn.off{background:var(--red)}
   .cbtn.leave{background:var(--red)}
   .cbtn svg{width:24px;height:24px}
-  .devrow{margin-top:12px;display:flex;gap:8px;align-items:center}
-  .devrow select{flex:1}
+  .panel{margin-top:12px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .devrow{display:flex;gap:8px;align-items:center}
+  .devrow select{flex:1;min-width:0}
+  .gaterow{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .chk{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--tx);
+       font-weight:600;cursor:pointer;margin:0 0 10px}
+  .chk input{accent-color:var(--accent);width:16px;height:16px;flex:none}
+  .meter{position:relative;height:10px;border-radius:5px;background:var(--bg3);
+         overflow:hidden;margin-bottom:10px}
+  .meter-fill{height:100%;width:0;background:linear-gradient(90deg,#8a5a2b,var(--accent));
+              border-radius:5px;transition:width .06s linear}
+  .meter-mark{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--tx);
+              border-radius:1px;left:0;opacity:.85}
+  .meter.closed .meter-fill{filter:grayscale(1) brightness(.6)}
+  .gatehint{color:var(--tx2);font-size:12px;margin:8px 0 0;line-height:1.6}
+  .gaterow.off .meter,.gaterow.off .devrow,.gaterow.off .gatehint{opacity:.4;pointer-events:none}
   .foot{color:var(--tx2);font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
   @media (max-width:420px){ .vol{width:56px} }
 </style>
@@ -136,9 +150,24 @@
       <button class="cbtn leave" id="btnLeave" title="ออกจากห้อง"></button>
     </div>
 
-    <div class="devrow">
-      <label for="micSel" style="margin:0">ไมค์</label>
-      <select id="micSel"></select>
+    <div class="panel">
+      <div class="devrow">
+        <label for="micSel" style="margin:0">ไมค์</label>
+        <select id="micSel"></select>
+      </div>
+
+      <div class="gaterow">
+        <label class="chk"><input type="checkbox" id="gateOn" checked> ตัดเสียงรบกวนตอนไม่ได้พูด</label>
+        <div class="meter" id="meter" title="แถบสีคือเสียงจากไมค์ตอนนี้ · ขีดคือเกณฑ์">
+          <div class="meter-fill" id="meterFill"></div>
+          <div class="meter-mark" id="meterMark"></div>
+        </div>
+        <div class="devrow">
+          <label for="gateThresh" style="margin:0;white-space:nowrap">ความไว</label>
+          <input type="range" id="gateThresh" min="0.005" max="0.15" step="0.005" style="flex:1">
+        </div>
+        <p class="gatehint">พูดตามปกติแล้วดูแถบด้านบน — ตั้งขีดให้อยู่เหนือเสียงพื้นหลัง แต่ต่ำกว่าตอนคุณพูด</p>
+      </div>
     </div>
 
     <p class="foot">
@@ -186,7 +215,11 @@
   var roster = {};          // id -> {id,name,muted}
   var media = {};           // id -> MediaConnection
   var audio = {};           // id -> {el, ctx, analyser, data, talking}
-  var localStream = null, localAnalyser = null, localData = null, localTalking = false;
+  var rawStream = null;     // เสียงดิบจากไมค์
+  var localStream = null;   // เสียงที่ส่งออกไปจริง (ผ่าน noise gate แล้ว)
+  var localAnalyser = null, localData = null, localTalking = false;
+  var gateSrc = null, gateNode = null, gateDest = null;
+  var gateOn = true, gateThresh = 0.045, gateOpenUntil = 0, gateIsOpen = false;
   var ac = null;
   var volumes = {};         // id -> 0..1
   var memberSeen = {};      // host only: id -> last heartbeat ts
@@ -256,11 +289,10 @@
       if(saved) { store("mr_mic",""); return navigator.mediaDevices.getUserMedia(audioConstraints("")); }
       throw e;
     }).then(function(stream){
-      localStream = stream;
+      buildAudioChain(stream);
       me.muted = true;
-      stream.getAudioTracks().forEach(function(t){ t.enabled = false; });
-      paintButtons();
-      setupLocalAnalyser();
+      applyMute();
+      paintButtons(); paintGateUI();
       listMics();
       startPeer();
     }).catch(function(e){
@@ -509,13 +541,43 @@
     if(ac.state === "suspended") ac.resume().catch(function(){});
   }
 
-  function setupLocalAnalyser(){
+  // สร้างสายสัญญาณ: ไมค์ -> analyser (วัดระดับก่อนถูกตัด) -> gate -> สตรีมที่ส่งออก
+  // ถ้าเบราว์เซอร์ทำ Web Audio ไม่ได้ ก็ถอยไปส่งเสียงดิบตรง ๆ
+  function buildAudioChain(stream){
+    rawStream = stream;
     try{
       ensureAC();
-      var src = ac.createMediaStreamSource(localStream);
+      var src = ac.createMediaStreamSource(stream);
       var an = ac.createAnalyser(); an.fftSize = 512; an.smoothingTimeConstant = .5;
       src.connect(an);
       localAnalyser = an; localData = new Uint8Array(an.fftSize);
+
+      if(gateNode && gateDest){
+        // แค่สลับไมค์ — ต่อต้นทางใหม่เข้าสายเดิม ปลายทางไม่เปลี่ยน
+        try{ gateSrc.disconnect(); }catch(e){}
+        gateSrc = src; src.connect(gateNode);
+        return;
+      }
+
+      var g = ac.createGain();
+      g.gain.value = gateOn ? 0 : 1;
+      var dest = ac.createMediaStreamDestination();
+      src.connect(g); g.connect(dest);
+      gateSrc = src; gateNode = g; gateDest = dest;
+      localStream = dest.stream;
+      return;
+    }catch(e){}
+    localAnalyser = null; localStream = stream;
+  }
+
+  // เปิด/ปิดประตูเสียงแบบนุ่ม ๆ กันเสียงกึก
+  function setGate(open){
+    if(gateIsOpen === open || !gateNode || !ac) return;
+    gateIsOpen = open;
+    try{
+      gateNode.gain.cancelScheduledValues(ac.currentTime);
+      // เปิดเร็ว (10ms) ปิดช้า (120ms) เพื่อไม่ให้กินคำท้ายประโยค
+      gateNode.gain.setTargetAtTime(open ? 1 : 0, ac.currentTime, open ? 0.01 : 0.12);
     }catch(e){}
   }
 
@@ -527,10 +589,26 @@
     return Math.sqrt(sum/buf.length);
   }
 
-  var THRESH = 0.045;
+  var THRESH = 0.045;        // เกณฑ์ไฟ "กำลังพูด" ของคนอื่น
+  var GATE_HOLD = 350;       // ค้างประตูเปิดไว้กี่ ms หลังเสียงเงียบลง
+  var meterAt = 0;
+
   function tick(){
     var changed = false;
-    var lt = (!me.muted && level(localAnalyser, localData) > THRESH);
+    var lvl = level(localAnalyser, localData);
+    var now = Date.now();
+
+    if(gateNode){
+      if(me.muted) setGate(false);
+      else if(!gateOn) setGate(true);
+      else {
+        if(lvl > gateThresh) gateOpenUntil = now + GATE_HOLD;
+        setGate(now < gateOpenUntil);
+      }
+    }
+    if(now - meterAt > 60){ meterAt = now; paintMeter(lvl); }
+
+    var lt = !me.muted && (gateOn && gateNode ? gateIsOpen : lvl > THRESH);
     if(lt !== localTalking){ localTalking = lt; changed = true; }
     Object.keys(audio).forEach(function(id){
       var a = audio[id];
@@ -542,6 +620,37 @@
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
+
+  // ---------------------------------------------------------------- noise gate UI
+  function meterPos(v){ return Math.max(0, Math.min(1, Math.sqrt(v / 0.3))) * 100; }
+
+  function paintMeter(lvl){
+    if($("room").style.display === "none") return;
+    $("meterFill").style.width = meterPos(lvl).toFixed(1) + "%";
+    $("meter").classList.toggle("closed", gateOn && !gateIsOpen);
+  }
+  function paintGateUI(){
+    $("gateOn").checked = gateOn;
+    $("gateThresh").value = gateThresh;
+    $("meterMark").style.left = meterPos(gateThresh).toFixed(1) + "%";
+    document.querySelector(".gaterow").classList.toggle("off", !gateOn);
+  }
+
+  gateOn = store("mr_gate") !== "0";
+  var savedThresh = parseFloat(store("mr_gate_th"));
+  if(savedThresh > 0) gateThresh = savedThresh;
+
+  $("gateOn").addEventListener("change", function(){
+    gateOn = $("gateOn").checked;
+    store("mr_gate", gateOn ? "1" : "0");
+    if(!gateOn) setGate(true);
+    paintGateUI();
+  });
+  $("gateThresh").addEventListener("input", function(){
+    gateThresh = parseFloat($("gateThresh").value) || 0.045;
+    store("mr_gate_th", String(gateThresh));
+    paintGateUI();
+  });
 
   // ---------------------------------------------------------------- UI
   function enterRoom(){
@@ -626,9 +735,14 @@
     $("btnLeave").innerHTML = SVG.leave;
   }
 
+  function applyMute(){
+    [rawStream, localStream].forEach(function(s){
+      try{ if(s) s.getAudioTracks().forEach(function(t){ t.enabled = !me.muted; }); }catch(e){}
+    });
+  }
   function toggleMic(){
     me.muted = !me.muted;
-    if(localStream) localStream.getAudioTracks().forEach(function(t){ t.enabled = !me.muted; });
+    applyMute();
     ensureAC();
     announceState(); paintButtons();
   }
@@ -643,7 +757,8 @@
     try{ if(hostConn) hostConn.close(); }catch(e){}
     try{ if(hostPeer) hostPeer.destroy(); }catch(e){}
     try{ if(selfPeer) selfPeer.destroy(); }catch(e){}
-    try{ localStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    try{ if(rawStream) rawStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    try{ if(localStream) localStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
     location.reload();
   }
 
@@ -697,20 +812,27 @@
     var id = $("micSel").value;
     store("mr_mic", id);
     navigator.mediaDevices.getUserMedia(audioConstraints(id)).then(function(ns){
-      var track = ns.getAudioTracks()[0];
-      track.enabled = !me.muted;
-      Object.keys(media).forEach(function(k){
-        var pc = media[k].peerConnection;
-        if(!pc) return;
-        pc.getSenders().forEach(function(s){ if(s.track && s.track.kind === "audio") s.replaceTrack(track).catch(function(){}); });
-      });
-      try{ localStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
-      localStream = ns;
-      setupLocalAnalyser();
+      var old = rawStream;
+      buildAudioChain(ns);
+      applyMute();
+      // สายที่ส่งออกเป็นปลายทางเดิม เลยไม่ต้อง replaceTrack ให้ทุกคน
+      // ยกเว้นตอนที่ Web Audio ใช้ไม่ได้ ซึ่งจะส่งเสียงดิบตรง ๆ
+      if(localStream === ns){
+        var track = ns.getAudioTracks()[0];
+        Object.keys(media).forEach(function(k){
+          var pc = media[k].peerConnection;
+          if(!pc) return;
+          pc.getSenders().forEach(function(s){
+            if(s.track && s.track.kind === "audio") s.replaceTrack(track).catch(function(){});
+          });
+        });
+      }
+      try{ if(old && old !== ns) old.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
     }).catch(function(){});
   });
 
   paintButtons();
+  paintGateUI();
 })();
 </script>
 </body>
