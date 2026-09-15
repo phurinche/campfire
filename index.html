@@ -402,8 +402,13 @@
       if(settled) return; settled = true;
       amHost = true; hostPeer = probe;
       probe.on("connection", function(conn){
+        if(banned[conn.peer]){
+          try{ conn.send({ t:"kicked" }); }catch(e){}
+          setTimeout(function(){ try{ conn.close(); }catch(e){} }, 300);
+          return;
+        }
         memberConns[conn.peer] = conn;
-        conn.on("data", function(m){ onData(conn, m); });
+        conn.on("data", function(m){ onData(conn, m, "member"); });
         conn.on("close", function(){ delete memberConns[conn.peer]; delete roster[conn.peer]; broadcastRoster(); render(); });
         conn.on("error", function(){ delete memberConns[conn.peer]; });
       });
@@ -442,7 +447,7 @@
       opened = true; setConn(true); lastRosterAt = Date.now();
       conn.send({ t:"hello", id:me.id, name:me.name, muted:me.muted });
     });
-    conn.on("data", function(m){ onData(conn, m); });
+    conn.on("data", function(m){ onData(conn, m, "host"); });
     conn.on("close", onHostLost);
     conn.on("error", function(){ if(!opened) onHostLost(); });
     // safety: if it never opens, the host id is stale -> try to take it over
@@ -459,8 +464,18 @@
   }
 
   // ---------------------------------------------------------------- data
-  function onData(conn, m){
+  // สายแต่ละประเภทส่งได้เฉพาะข้อความของตัวเอง
+  // สายแชทเป็นสายระหว่างสมาชิกด้วยกัน จึงห้ามสั่งอะไรเกี่ยวกับห้องเด็ดขาด
+  var ALLOWED = {
+    chat:   { chat:1 },                    // สายแชท mesh ระหว่างสมาชิก
+    member: { hello:1, state:1, ping:1 },  // สมาชิกรายงานตัวเข้ามาหา host
+    host:   { roster:1, kicked:1 }         // host สั่งการลงมาหาสมาชิก
+  };
+
+  function onData(conn, m, role){
     if(!m || typeof m !== "object") return;
+    var rules = ALLOWED[role];
+    if(!rules || !rules[m.t]) return;      // สายนี้ไม่มีสิทธิ์ส่งข้อความชนิดนี้
     if(m.t === "chat"){
       if(typeof m.text !== "string") return;
       // ใช้ id ของสายเป็นหลัก ไม่เชื่อ id ที่แนบมาในข้อความ
@@ -471,7 +486,9 @@
       return;
     }
     if(m.t === "kicked"){
-      if(!amHost) showKicked();
+      if(amHost) return;                   // host ไม่ถูกใครเตะ
+      if(conn !== hostConn) return;        // ต้องมาจากสายที่ต่อกับ host จริง ๆ
+      showKicked();
       return;
     }
     if(m.t === "hello" || m.t === "state" || m.t === "ping"){
@@ -489,6 +506,7 @@
       if(!was || was.name !== now.name || was.muted !== now.muted){ broadcastRoster(); render(); reconcile(); }
     } else if(m.t === "roster"){
       if(amHost) return;
+      if(conn !== hostConn) return;        // รายชื่อรับจาก host เท่านั้น
       lastRosterAt = Date.now();
       var next = {};
       (m.peers||[]).forEach(function(p){
@@ -729,7 +747,7 @@
     var id = conn.peer;
     if(chatConns[id] && chatConns[id] !== conn){ try{ chatConns[id].close(); }catch(e){} }
     chatConns[id] = conn;
-    conn.on("data", function(m){ onData(conn, m); });
+    conn.on("data", function(m){ onData(conn, m, "chat"); });
     conn.on("close", function(){ if(chatConns[id] === conn) delete chatConns[id]; });
     conn.on("error", function(){ if(chatConns[id] === conn) delete chatConns[id]; });
   }
