@@ -53,6 +53,15 @@
   }
   .btn:hover{filter:brightness(1.1)}
   .btn:disabled{opacity:.5;cursor:default}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--tx2);
+    font-weight:600;margin-top:8px}
+  .btn.ghost:hover{color:var(--accent);border-color:var(--accent);filter:none}
+  .jtest{margin-top:14px}
+  .cbtn.ptt{box-shadow:0 0 0 2px var(--accent) inset}
+  .q{width:8px;height:8px;border-radius:50%;flex:none;background:var(--tx2);opacity:.35}
+  .q.good{background:var(--green);opacity:1}
+  .q.ok{background:var(--accent);opacity:1}
+  .q.bad{background:var(--red);opacity:1}
   .hint{color:var(--tx2);font-size:13px;margin:14px 0 0}
   .err{background:rgba(229,72,77,.12);border:1px solid rgba(229,72,77,.4);color:#ffb4b6;
        padding:10px 12px;border-radius:9px;font-size:14px;margin-top:14px;display:none}
@@ -174,6 +183,11 @@
         <input type="text" id="fRoom" maxlength="32" placeholder="เช่น หมาป่า-กลางคืน" autocomplete="off">
       </div>
       <button class="btn" id="btnJoin">เข้าห้อง</button>
+      <button class="btn ghost" id="btnTest" type="button">ทดสอบไมค์ก่อน</button>
+      <div class="jtest" id="jtest" hidden>
+        <div class="meter"><div class="meter-fill" id="jMeterFill"></div></div>
+        <p class="gatehint" id="jtestHint">ลองพูดดู — ถ้าแถบไม่ขยับเลย แปลว่าไมค์ตัวนี้ไม่มีเสียงเข้า</p>
+      </div>
       <div class="err" id="joinErr"></div>
       <p class="hint">เบราว์เซอร์จะขออนุญาตใช้ไมค์ — กด "อนุญาต" ด้วยนะ<br>
       <b>เข้าห้องมาไมค์จะปิดไว้ก่อน</b> กดปุ่มไมค์เมื่อพร้อมพูด<br>
@@ -226,6 +240,7 @@
         </div>
 
         <div class="gaterow">
+          <label class="chk"><input type="checkbox" id="pttOn"> กดค้างเพื่อพูด — เว้นวรรค หรือกดปุ่มไมค์ค้าง</label>
           <label class="chk"><input type="checkbox" id="soundOn" checked> เสียงแจ้งเตือนคนเข้า/ออก และข้อความใหม่</label>
           <p class="gatehint" id="linkHint"></p>
         </div>
@@ -304,6 +319,10 @@
   var since = {};           // id -> เวลาที่สายเริ่มต่อ ใช้ผ่อนผันช่วงรายชื่อยังไม่ซิงก์
   var soundOn = true;       // เสียงแจ้งเตือน
   var unread = 0;           // ข้อความที่ยังไม่ได้อ่านตอนอยู่แท็บอื่น
+  var pttOn = false;        // โหมดกดค้างเพื่อพูด
+  var pttHeld = false;      // กำลังกดค้างอยู่ไหม
+  var testingMic = false;   // กำลังทดสอบไมค์อยู่ที่หน้าแรก
+  var quality = {};         // id -> {loss, rtt} คุณภาพสายขาเข้า
   var audio = {};           // id -> {el, ctx, analyser, data, talking}
   var rawStream = null;     // เสียงดิบจากไมค์
   var localStream = null;   // เสียงที่ส่งออกไปจริง (ผ่าน noise gate แล้ว)
@@ -383,9 +402,29 @@
   })();
 
   soundOn = store("mr_sound") !== "0";
+  pttOn = store("mr_ptt") === "1";
   $("btnJoin").addEventListener("click", join);
   $("fRoom").addEventListener("keydown", function(e){ if(e.key==="Enter") join(); });
   $("fName").addEventListener("keydown", function(e){ if(e.key==="Enter") $("fRoom").focus(); });
+
+  $("btnTest").addEventListener("click", function(){
+    if(testingMic) return;
+    var b = $("btnTest");
+    b.disabled = true; b.textContent = "กำลังเปิดไมค์…";
+    navigator.mediaDevices.getUserMedia(audioConstraints(store("mr_mic") || ""))
+      .then(function(stream){
+        buildAudioChain(stream);           // ใช้สายเดิมต่อได้เลยตอนกดเข้าห้อง
+        testingMic = true;
+        $("jtest").hidden = false;
+        b.textContent = "ไมค์เปิดอยู่ — ลองพูดดู";
+      })
+      .catch(function(e){
+        b.disabled = false; b.textContent = "ทดสอบไมค์ก่อน";
+        showErr(e && e.name === "NotAllowedError"
+          ? "ยังไม่ได้อนุญาตให้ใช้ไมค์ — กดไอคอนที่แถบ URL แล้วเลือกอนุญาต"
+          : "เปิดไมค์ไม่สำเร็จ: " + (e && e.message ? e.message : e));
+      });
+  });
 
   function join(){
     var name = $("fName").value.trim(), room = $("fRoom").value.trim();
@@ -399,6 +438,11 @@
     store("mr_name", name); store("mr_room", room);
     $("btnJoin").disabled = true; $("btnJoin").textContent = "กำลังเข้าห้อง…";
 
+    if(testingMic && rawStream){         // ทดสอบไมค์ไว้แล้ว ไม่ต้องขอใหม่
+      testingMic = false;
+      me.muted = true; applyMute(); paintButtons(); paintGateUI(); listMics(); startPeer();
+      return;
+    }
     var saved = store("mr_mic") || "";
     navigator.mediaDevices.getUserMedia(audioConstraints(saved)).catch(function(e){
       // ไมค์ที่เคยเลือกไว้ไม่อยู่แล้ว (ถอดหูฟังออก ฯลฯ) -> ถอยไปใช้ค่าเริ่มต้นของเครื่อง
@@ -661,6 +705,7 @@
     if(!selfPeer || leaving || !me.id) return;
     var now = Date.now();
     pruneDeadMedia();
+    pollQuality();
     if(amHost){
       var dropped = false;
       Object.keys(roster).forEach(function(id){
@@ -700,6 +745,49 @@
       if(!chatConns[id]) openChat(id);
     });
   }, 3000);
+
+  // ดึงสถิติขาเข้าของแต่ละสาย เพื่อบอกว่าเสียงใครกระตุกเพราะเน็ตใคร
+  function pollQuality(){
+    Object.keys(media).forEach(function(id){
+      var pc = media[id] && media[id].peerConnection;
+      if(!pc || !pc.getStats) return;
+      pc.getStats(null).then(function(stats){
+        var recv = null, pair = null;
+        stats.forEach(function(r){
+          if(r.type === "inbound-rtp" && r.kind === "audio") recv = r;
+          if(r.type === "candidate-pair" && r.state === "succeeded") pair = r;
+        });
+        if(!recv) return;
+        var prev = quality[id] || {};
+        var dLost = (recv.packetsLost || 0) - (prev._lost || 0);
+        var dRecv = (recv.packetsReceived || 0) - (prev._recv || 0);
+        var loss = dRecv + dLost > 0 ? (dLost / (dRecv + dLost)) * 100 : 0;
+        quality[id] = {
+          loss: Math.max(0, loss),
+          rtt: pair && pair.currentRoundTripTime ? Math.round(pair.currentRoundTripTime * 1000) : null,
+          _lost: recv.packetsLost || 0,
+          _recv: recv.packetsReceived || 0,
+          at: Date.now()
+        };
+        paintQuality();
+      }).catch(function(){});
+    });
+  }
+
+  function paintQuality(){
+    var lis = document.querySelectorAll("li.person");
+    for(var i = 0; i < lis.length; i++){
+      var id = lis[i].dataset.id, el = lis[i].querySelector(".q");
+      if(!el) continue;
+      var q = quality[id];
+      el.className = "q";
+      if(!q || Date.now() - q.at > 15000){ el.title = "ยังไม่มีข้อมูลสาย"; continue; }
+      var grade = q.loss < 2 ? "good" : q.loss < 8 ? "ok" : "bad";
+      el.classList.add(grade);
+      el.title = "เสียงหาย " + q.loss.toFixed(1) + "%" + (q.rtt != null ? " · หน่วง " + q.rtt + " ms" : "") +
+                 (grade === "good" ? " — ดี" : grade === "ok" ? " — พอใช้" : " — แย่");
+    }
+  }
 
   function pruneDeadMedia(){
     Object.keys(media).forEach(function(id){
@@ -1028,11 +1116,16 @@
   function meterPos(v){ return Math.max(0, Math.min(1, Math.sqrt(v / 0.3))) * 100; }
 
   function paintMeter(lvl){
-    if(!inRoom) return;
-    $("meterFill").style.width = meterPos(lvl).toFixed(1) + "%";
-    $("meter").classList.toggle("closed", gateOn && !gateIsOpen);
+    var w = meterPos(lvl).toFixed(1) + "%";
+    if(inRoom){
+      $("meterFill").style.width = w;
+      $("meter").classList.toggle("closed", gateOn && !gateIsOpen);
+    } else if(testingMic){
+      $("jMeterFill").style.width = w;
+    }
   }
   function paintGateUI(){
+    $("pttOn").checked = pttOn;
     $("soundOn").checked = soundOn;
     $("gateOn").checked = gateOn;
     $("gateThresh").value = gateThresh;
@@ -1123,7 +1216,7 @@
       var q = roster[id] || {};
       return id + "\u0001" + (q.name || "") + (q.muted ? "1" : "0") + (media[id] ? "1" : "0");
     }).join("\u0002") + "\u0003" + amHost + "\u0003" + armedKick;
-    if(sig === lastSig){ paintTalking(); paintButtons(); return; }
+    if(sig === lastSig){ paintTalking(); paintQuality(); paintButtons(); return; }
     lastSig = sig;
 
     ul.innerHTML = "";
@@ -1145,6 +1238,11 @@
 
       var st = document.createElement("div");
       st.className = "pstat";
+      if(!isMe){
+        var q = document.createElement("span");
+        q.className = "q"; q.title = "ยังไม่มีข้อมูลสาย";
+        st.appendChild(q);
+      }
       if(p.muted){ var m=document.createElement("span"); m.className="muted-i"; m.innerHTML=SVG.micOff; st.appendChild(m); }
       if(!isMe && amHost){
         (function(pid, pname){
@@ -1180,6 +1278,7 @@
       ul.appendChild(li);
     });
     paintTalking();
+    paintQuality();
     paintButtons();
   }
 
@@ -1196,6 +1295,8 @@
     var b = $("btnMic");
     b.innerHTML = me.muted ? SVG.micOff : SVG.mic;
     b.classList.toggle("off", me.muted);
+    b.classList.toggle("ptt", pttOn);
+    b.title = pttOn ? "กดค้างเพื่อพูด (เว้นวรรค)" : "เปิด/ปิดไมค์ (กด M)";
     var d = $("btnDeaf");
     d.innerHTML = deafened ? SVG.spkOff : SVG.spk;
     d.classList.toggle("off", deafened);
@@ -1258,10 +1359,33 @@
     });
   }
   function toggleMic(){
+    if(pttOn) return;                    // โหมดกดค้าง ปุ่มนี้ไม่สลับสถานะ
     me.muted = !me.muted;
     applyMute();
     ensureAC();
     announceState(); paintButtons();
+  }
+
+  // กดค้างเพื่อพูด — ใช้ได้ทั้งปุ่มเว้นวรรคและกดปุ่มไมค์ค้าง (สำหรับมือถือ)
+  function pttPress(){
+    if(!pttOn || pttHeld || !inRoom) return;
+    pttHeld = true; me.muted = false;
+    applyMute(); ensureAC(); announceState(); paintButtons();
+  }
+  function pttRelease(){
+    if(!pttOn || !pttHeld) return;
+    pttHeld = false; me.muted = true;
+    applyMute(); announceState(); paintButtons();
+  }
+
+  function setPtt(on){
+    pttOn = on;
+    store("mr_ptt", on ? "1" : "0");
+    pttHeld = false;
+    me.muted = true;                     // เปิดหรือปิดโหมดนี้ ให้เริ่มจากไมค์ปิดเสมอ
+    applyMute();
+    if(inRoom) announceState();
+    paintButtons(); paintGateUI();
   }
   function toggleDeaf(){
     deafened = !deafened;
@@ -1283,13 +1407,22 @@
   $("btnMic").addEventListener("click", toggleMic);
   $("btnDeaf").addEventListener("click", toggleDeaf);
   $("btnGear").addEventListener("click", toggleSettings);
+  ["pointerdown"].forEach(function(ev){ $("btnMic").addEventListener(ev, pttPress); });
+  ["pointerup","pointercancel","pointerleave"].forEach(function(ev){ $("btnMic").addEventListener(ev, pttRelease); });
+  $("pttOn").addEventListener("change", function(){ setPtt($("pttOn").checked); });
   $("btnLeave").addEventListener("click", leave);
   document.addEventListener("keydown", function(e){
     if(!inRoom) return;
     if(e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+    if(e.key === " " && pttOn){ e.preventDefault(); pttPress(); return; }
     if(e.key === "m" || e.key === "M" || e.key === "ษ"){ e.preventDefault(); toggleMic(); }
     if(e.key === "d" || e.key === "D" || e.key === "ก"){ e.preventDefault(); toggleDeaf(); }
   });
+  document.addEventListener("keyup", function(e){
+    if(e.key === " " && pttOn){ e.preventDefault(); pttRelease(); }
+  });
+  window.addEventListener("blur", pttRelease);   // สลับหน้าต่างระหว่างกดค้าง = ปล่อยไมค์
+
   window.addEventListener("beforeunload", function(){
     try{ if(hostPeer) hostPeer.destroy(); if(selfPeer) selfPeer.destroy(); }catch(e){}
   });
