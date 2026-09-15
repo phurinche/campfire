@@ -67,6 +67,7 @@
   .dot.bad{background:var(--red)}
   .rname{font-weight:700}
   .rmeta{color:var(--tx2);font-size:13px;margin-left:auto}
+  .rmeta.warn{color:var(--accent);font-weight:600}
 
   /* รายชื่อไม่ยาวเกิน ~3 แถว แล้วเลื่อนเอา ที่เหลือยกให้แชท */
   ul.people{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px;
@@ -257,6 +258,17 @@
   var PEEROPT = { debug:0, config:{ iceServers: ICE, sdpSemantics:"unified-plan" } };
   var PREFIX = "microom-v1-";
 
+  // เลขรุ่นของโปรโตคอล — เปลี่ยนเฉพาะตอนรูปแบบข้อความเปลี่ยน ไม่ใช่ตอนแก้สีปุ่ม
+  // มีไว้กันไฟล์คนละรุ่นเจอกันแล้วพังเงียบ ๆ ไม่ใช่มาตรการความปลอดภัย
+  // (คนที่แก้ไฟล์เองก็แก้เลขนี้ให้ตรงได้ และนั่นไม่ใช่สิ่งที่มันมีไว้กัน)
+  var PROTOCOL = 1;
+
+  var MAX_PEERS = 8;      // เกินนี้ mesh เริ่มไม่ไหว และจะพังแบบเงียบ ๆ
+  var WARN_PEERS = 6;     // เริ่มเตือนตั้งแต่ตรงนี้
+
+  var CHAT_WINDOW = 10000; // หน้าต่างนับข้อความ (ms)
+  var CHAT_BURST = 10;     // เกินกี่ข้อความในหน้าต่างนั้นถือว่ารัวเกิน
+
   // ---------------------------------------------------------------- state
   var me = { id:null, name:"", muted:true };   // เข้าห้องมาไมค์ปิดไว้ก่อนเสมอ
   var roomSlug = "", roomLabel = "", hostId = "";
@@ -277,6 +289,7 @@
   var armTimer = null;
   var kickedIds = {};       // ไว้บอกว่า "ถูกเชิญออก" แทน "ออกจากห้อง"
   var lastSig = "";         // ลายเซ็นรายชื่อ ไว้กันวาดใหม่ทั้งที่ไม่มีอะไรเปลี่ยน
+  var chatRate = {};        // id -> {times:[], notedAt:0} นับความถี่ข้อความฝั่งผู้รับ
   var audio = {};           // id -> {el, ctx, analyser, data, talking}
   var rawStream = null;     // เสียงดิบจากไมค์
   var localStream = null;   // เสียงที่ส่งออกไปจริง (ผ่าน noise gate แล้ว)
@@ -332,6 +345,10 @@
   // ---------------------------------------------------------------- join
   $("fName").value = store("mr_name") || "";
   $("fRoom").value = store("mr_room") || "";
+  try{
+    var backMsg = sessionStorage.getItem("mr_msg");
+    if(backMsg){ sessionStorage.removeItem("mr_msg"); showErr(backMsg); }
+  }catch(e){}
   $("btnJoin").addEventListener("click", join);
   $("fRoom").addEventListener("keydown", function(e){ if(e.key==="Enter") join(); });
   $("fName").addEventListener("keydown", function(e){ if(e.key==="Enter") $("fRoom").focus(); });
@@ -445,7 +462,7 @@
     var opened = false;
     conn.on("open", function(){
       opened = true; setConn(true); lastRosterAt = Date.now();
-      conn.send({ t:"hello", id:me.id, name:me.name, muted:me.muted });
+      conn.send({ t:"hello", proto:PROTOCOL, id:me.id, name:me.name, muted:me.muted });
     });
     conn.on("data", function(m){ onData(conn, m, "host"); });
     conn.on("close", onHostLost);
@@ -469,7 +486,7 @@
   var ALLOWED = {
     chat:   { chat:1 },                    // สายแชท mesh ระหว่างสมาชิก
     member: { hello:1, state:1, ping:1 },  // สมาชิกรายงานตัวเข้ามาหา host
-    host:   { roster:1, kicked:1 }         // host สั่งการลงมาหาสมาชิก
+    host:   { roster:1, kicked:1, full:1, badver:1 } // host สั่งการลงมาหาสมาชิก
   };
 
   function onData(conn, m, role){
@@ -480,9 +497,24 @@
       if(typeof m.text !== "string") return;
       // ใช้ id ของสายเป็นหลัก ไม่เชื่อ id ที่แนบมาในข้อความ
       var from = conn.peer;
+      if(tooFast(from)) return;             // ผู้ส่งจะแก้โค้ดยังไงก็ไม่ช่วย เราเป็นคนตัดสิน
       var nm = (roster[from] && roster[from].name) || nameCache[from] ||
                String(m.name || "ไม่มีชื่อ").slice(0, 20);
       addMsg(from, nm, m.text.slice(0, 500), typeof m.ts === "number" ? m.ts : Date.now());
+      return;
+    }
+    if(m.t === "full"){
+      if(amHost || conn !== hostConn) return;
+      backToJoin("ห้องนี้เต็มแล้ว (" + (m.max || MAX_PEERS) + "/" + (m.max || MAX_PEERS) +
+                 " คน) — รอให้มีคนออกก่อนแล้วลองใหม่");
+      return;
+    }
+    if(m.t === "badver"){
+      if(amHost || conn !== hostConn) return;
+      var theirs = typeof m.proto === "number" ? m.proto : 0;
+      backToJoin(theirs > PROTOCOL
+        ? "ไฟล์ของคุณเก่ากว่าของเจ้าของห้อง (รุ่น " + PROTOCOL + " เทียบกับ " + theirs + ") — ขอไฟล์ล่าสุดจากเขาก่อนนะ"
+        : "ไฟล์ของเจ้าของห้องเก่ากว่าของคุณ (รุ่น " + theirs + " เทียบกับ " + PROTOCOL + ") — ส่งไฟล์ใหม่ให้เขาแล้วให้เปิดห้องอีกที");
       return;
     }
     if(m.t === "kicked"){
@@ -498,9 +530,25 @@
         return;
       }
       var id = conn.peer;
+      var was = roster[id];
+
+      if(!was){                                    // คนใหม่เท่านั้นที่ต้องผ่านด่าน
+        if(m.t === "hello" && m.proto !== PROTOCOL){
+          try{ conn.send({ t:"badver", proto:PROTOCOL }); }catch(e){}
+          setTimeout(function(){ try{ conn.close(); }catch(e){} }, 300);
+          delete memberConns[id];
+          return;
+        }
+        if(Object.keys(roster).length >= MAX_PEERS){
+          try{ conn.send({ t:"full", max:MAX_PEERS }); }catch(e){}
+          setTimeout(function(){ try{ conn.close(); }catch(e){} }, 300);
+          delete memberConns[id];
+          return;
+        }
+      }
+
       memberSeen[id] = Date.now();
       memberConns[id] = conn;
-      var was = roster[id];
       var now = { id:id, name:String(m.name||"ไม่มีชื่อ").slice(0,20), muted:!!m.muted };
       roster[id] = now;
       if(!was || was.name !== now.name || was.muted !== now.muted){ broadcastRoster(); render(); reconcile(); }
@@ -780,6 +828,30 @@
     }, 8000);
   }
 
+  // จำกัดความถี่ข้อความที่ "รับเข้า" — บังคับที่เครื่องเรา ไม่ได้ขอความร่วมมือจากผู้ส่ง
+  function tooFast(id){
+    var now = Date.now();
+    var r = chatRate[id] || (chatRate[id] = { times:[], notedAt:0 });
+    r.times = r.times.filter(function(t){ return now - t < CHAT_WINDOW; });
+    r.times.push(now);
+    if(r.times.length <= CHAT_BURST) return false;
+    if(now - r.notedAt > 30000){           // บอกครั้งเดียวต่อ 30 วิ ไม่งั้นกลายเป็นสแปมเสียเอง
+      r.notedAt = now;
+      var who = (roster[id] && roster[id].name) || nameCache[id] || "ใครบางคน";
+      addNotice("ข้อความจาก " + who + " ถูกชะลอเพราะส่งถี่เกินไป");
+    }
+    return true;
+  }
+
+  // ออกจากห้องกลับไปหน้าแรกพร้อมข้อความ — รีโหลดเพื่อล้าง state ทั้งหมดให้สะอาด
+  function backToJoin(msg){
+    if(leaving) return;
+    leaving = true;
+    try{ sessionStorage.setItem("mr_msg", msg); }catch(e){}
+    try{ if(rawStream) rawStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    location.reload();
+  }
+
   function sendChat(text){
     text = String(text).trim().slice(0, 500);
     if(!text) return;
@@ -898,9 +970,11 @@
     var d = $("connDot");
     d.classList.toggle("on", !!ok);
     d.classList.toggle("bad", !ok);
+    var n = Object.keys(roster).length || 1;
     $("roomMeta").textContent = ok
-      ? (Object.keys(roster).length || 1) + " คนในห้อง" + (amHost ? " · คุณเป็นเจ้าของห้อง" : "")
+      ? n + "/" + MAX_PEERS + " คนในห้อง" + (amHost ? " · คุณเป็นเจ้าของห้อง" : "")
       : "กำลังเชื่อมต่อ…";
+    $("roomMeta").classList.toggle("warn", ok && n >= WARN_PEERS);
   }
 
   function render(){
