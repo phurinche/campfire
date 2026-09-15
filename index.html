@@ -290,6 +290,8 @@
   var kickedIds = {};       // ไว้บอกว่า "ถูกเชิญออก" แทน "ออกจากห้อง"
   var lastSig = "";         // ลายเซ็นรายชื่อ ไว้กันวาดใหม่ทั้งที่ไม่มีอะไรเปลี่ยน
   var chatRate = {};        // id -> {times:[], notedAt:0} นับความถี่ข้อความฝั่งผู้รับ
+  var streams = {};         // id -> MediaStream ที่ได้รับมา (เก็บไว้ก่อน ค่อยตัดสินว่าจะเล่นไหม)
+  var since = {};           // id -> เวลาที่สายเริ่มต่อ ใช้ผ่อนผันช่วงรายชื่อยังไม่ซิงก์
   var audio = {};           // id -> {el, ctx, analyser, data, talking}
   var rawStream = null;     // เสียงดิบจากไมค์
   var localStream = null;   // เสียงที่ส่งออกไปจริง (ผ่าน noise gate แล้ว)
@@ -322,6 +324,14 @@
     var h=0; for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
     return "hsl("+(h%360)+" 55% 45%)";
   }
+  // ชื่อซ้ำกันเมื่อไหร่ค่อยโชว์รหัสกำกับ ไม่ซ้ำก็ไม่ต้องรก
+  function displayName(id){
+    var n = (roster[id] && roster[id].name) || nameCache[id] || "ไม่มีชื่อ";
+    var c = 0;
+    Object.keys(roster).forEach(function(k){ if((roster[k] || {}).name === n) c++; });
+    return c > 1 ? n + " #" + id.slice(-4) : n;
+  }
+
   function initials(n){ n=(n||"?").trim(); return n ? n.slice(0,2).toUpperCase() : "?"; }
   function showErr(m){ var e=$("joinErr"); e.textContent=m; e.classList.add("show"); }
 
@@ -393,6 +403,7 @@
 
     selfPeer.on("open", function(){ tryClaimHost(); });
     selfPeer.on("call", function(call){
+      if(banned[call.peer]){ try{ call.close(); }catch(e){} return; }
       call.answer(localStream);
       wireCall(call);
     });
@@ -407,7 +418,10 @@
     });
     selfPeer.on("disconnected", function(){ setConn(false); try{ selfPeer.reconnect(); }catch(e){} });
     // ช่องที่ต่อเข้ามาที่ id ของเราโดยตรง = ช่องแชทจากเพื่อน
-    selfPeer.on("connection", function(conn){ wireChat(conn); });
+    selfPeer.on("connection", function(conn){
+      if(banned[conn.peer]){ try{ conn.close(); }catch(e){} return; }
+      wireChat(conn);
+    });
   }
 
   // become host if the room id is free, else connect to whoever holds it
@@ -429,7 +443,10 @@
         conn.on("close", function(){ delete memberConns[conn.peer]; delete roster[conn.peer]; broadcastRoster(); render(); });
         conn.on("error", function(){ delete memberConns[conn.peer]; });
       });
-      probe.on("call", function(call){ call.answer(localStream); wireCall(call); });
+      probe.on("call", function(call){
+        if(banned[call.peer]){ try{ call.close(); }catch(e){} return; }
+        call.answer(localStream); wireCall(call);
+      });
       probe.on("error", function(e){ if(e && e.type==="peer-unavailable") return; });
       hostConn = null;
       var grace = Date.now();
@@ -497,10 +514,10 @@
       if(typeof m.text !== "string") return;
       // ใช้ id ของสายเป็นหลัก ไม่เชื่อ id ที่แนบมาในข้อความ
       var from = conn.peer;
+      if(!roster[from] || banned[from]) return;  // คนนอกห้องพูดไม่ได้ แม้จะต่อสายกลับเข้ามาเอง
       if(tooFast(from)) return;             // ผู้ส่งจะแก้โค้ดยังไงก็ไม่ช่วย เราเป็นคนตัดสิน
-      var nm = (roster[from] && roster[from].name) || nameCache[from] ||
-               String(m.name || "ไม่มีชื่อ").slice(0, 20);
-      addMsg(from, nm, m.text.slice(0, 500), typeof m.ts === "number" ? m.ts : Date.now());
+      addMsg(from, displayName(from), m.text.slice(0, 500),
+             typeof m.ts === "number" ? m.ts : Date.now());
       return;
     }
     if(m.t === "full"){
@@ -557,8 +574,9 @@
       if(conn !== hostConn) return;        // รายชื่อรับจาก host เท่านั้น
       lastRosterAt = Date.now();
       var next = {};
-      (m.peers||[]).forEach(function(p){
-        if(!p || !p.id) return;
+      // ตัดที่ MAX_PEERS เผื่อ host ที่ถูกแก้โค้ดส่งรายชื่อมาเป็นแสนจนเครื่องเราค้าง
+      (m.peers||[]).slice(0, MAX_PEERS).forEach(function(p){
+        if(!p || !p.id || typeof p.id !== "string" || p.id.length > 80) return;
         next[p.id] = { id:p.id, name:String(p.name||"ไม่มีชื่อ").slice(0,20), muted:!!p.muted };
       });
       next[me.id] = { id:me.id, name:me.name, muted:me.muted };
@@ -595,15 +613,24 @@
         if(!chatConns[id]) openChat(id);
       }
     });
-    Object.keys(media).forEach(function(id){
-      if(!roster[id] && id !== me.id) teardown(id);
-    });
+    // สายจากคนที่ไม่อยู่ในรายชื่อ:
+    //  - เคยอยู่ในห้องมาก่อน (มีใน nameCache) = ออกไปแล้วหรือถูกไล่ -> ตัดทันที
+    //  - ไม่เคยเห็นเลย = น่าจะเป็นคนเพิ่งเข้าที่รายชื่อยังมาไม่ถึง -> ผ่อนผัน 15 วิ
+    var t = Date.now();
+    var stale = function(id){
+      if(roster[id] || id === me.id) return false;
+      if(banned[id] || nameCache[id]) return true;
+      return t - (since[id] || t) > 15000;
+    };
+    Object.keys(media).forEach(function(id){ if(stale(id)) teardown(id); });
     Object.keys(chatConns).forEach(function(id){
-      if(!roster[id] && id !== me.id){
+      if(stale(id)){
         try{ chatConns[id].close(); }catch(e){}
         delete chatConns[id];
       }
     });
+    Object.keys(since).forEach(function(id){ if(!media[id] && !chatConns[id]) delete since[id]; });
+    syncAudio();
   }
   // heartbeat: keeps the roster honest and detects a host that vanished
   setInterval(function(){
@@ -627,7 +654,8 @@
         }
       });
       broadcastRoster();
-      if(dropped){ render(); reconcile(); }
+      reconcile();                       // เก็บกวาดสายค้างทุกรอบ ไม่ใช่เฉพาะตอนมีคนหลุด
+      if(dropped) render();
     } else {
       if(hostConn && hostConn.open){
         // สถานะสายจริง ๆ เชื่อถือได้กว่านาฬิกาของเรา เพราะไม่โดนเบราว์เซอร์หรี่
@@ -670,8 +698,9 @@
     var id = call.peer;
     if(media[id] && media[id] !== call){ try{ media[id].close(); }catch(e){} }
     media[id] = call;
+    if(!since[id]) since[id] = Date.now();
     var flowing = false;
-    call.on("stream", function(stream){ flowing = true; attachAudio(id, stream); });
+    call.on("stream", function(stream){ flowing = true; streams[id] = stream; syncAudio(); });
     call.on("close", function(){ if(media[id] === call) teardown(id); });
     call.on("error", function(){ if(media[id] === call) teardown(id); });
     // เหตุผลเดียวกับสายแชท: สายที่ต่อไม่ติดต้องถูกทิ้ง ไม่งั้นบล็อกการต่อใหม่ถาวร
@@ -682,8 +711,19 @@
 
   function teardown(id){
     if(media[id]){ try{ media[id].close(); }catch(e){} delete media[id]; }
+    delete streams[id];
     dropAudio(id);
     render();
+  }
+
+  // เล่นเสียงเฉพาะคนที่อยู่ในรายชื่อห้องจริง ๆ — คนที่ถูกไล่ออกจะเงียบทันที
+  // แม้เขาจะต่อสายกลับเข้ามาเองก็ตาม
+  function syncAudio(){
+    Object.keys(streams).forEach(function(id){
+      var allowed = !!roster[id] && !banned[id];
+      if(allowed && !audio[id]) attachAudio(id, streams[id]);
+      else if(!allowed && audio[id]) dropAudio(id);
+    });
   }
 
   function dropAudio(id){
@@ -1007,7 +1047,7 @@
 
       var nm = document.createElement("div");
       nm.className = "pname";
-      nm.textContent = p.name;
+      nm.textContent = displayName(id);
       if(isMe){ var t=document.createElement("span"); t.className="tag"; t.textContent="คุณ"; nm.appendChild(t); }
       else if(!media[id]){ var t2=document.createElement("span"); t2.className="tag"; t2.textContent="กำลังต่อ…"; nm.appendChild(t2); }
 
