@@ -68,6 +68,10 @@
   .rname{font-weight:700}
   .rmeta{color:var(--tx2);font-size:13px;margin-left:auto}
   .rmeta.warn{color:var(--accent);font-weight:600}
+  .linkbtn{border:1px solid var(--line);background:transparent;color:var(--tx2);
+    border-radius:7px;padding:2px 9px;font-size:12px;white-space:nowrap;transition:color .12s,border-color .12s}
+  .linkbtn:hover{color:var(--accent);border-color:var(--accent)}
+  .linkbtn.done{color:var(--accent);border-color:var(--accent)}
 
   /* รายชื่อไม่ยาวเกิน ~3 แถว แล้วเลื่อนเอา ที่เหลือยกให้แชท */
   ul.people{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px;
@@ -184,6 +188,7 @@
       <span class="dot" id="connDot"></span>
       <span aria-hidden="true">🔥</span>
       <span class="rname" id="roomName"></span>
+      <button class="linkbtn" id="btnLink" type="button" hidden>คัดลอกลิงก์</button>
       <span class="rmeta" id="roomMeta"></span>
     </div>
 
@@ -218,6 +223,11 @@
           </div>
           <p class="gatehint">พูดตามปกติแล้วดูแถบด้านบน — ตั้งขีดให้อยู่เหนือเสียงพื้นหลัง แต่ต่ำกว่าตอนคุณพูด</p>
           <p class="gatehint">ปุ่มลัด: <b>M</b> เปิด/ปิดไมค์ &nbsp;·&nbsp; <b>D</b> ปิดเสียงทุกคน</p>
+        </div>
+
+        <div class="gaterow">
+          <label class="chk"><input type="checkbox" id="soundOn" checked> เสียงแจ้งเตือนคนเข้า/ออก และข้อความใหม่</label>
+          <p class="gatehint" id="linkHint"></p>
         </div>
       </div>
 
@@ -292,6 +302,8 @@
   var chatRate = {};        // id -> {times:[], notedAt:0} นับความถี่ข้อความฝั่งผู้รับ
   var streams = {};         // id -> MediaStream ที่ได้รับมา (เก็บไว้ก่อน ค่อยตัดสินว่าจะเล่นไหม)
   var since = {};           // id -> เวลาที่สายเริ่มต่อ ใช้ผ่อนผันช่วงรายชื่อยังไม่ซิงก์
+  var soundOn = true;       // เสียงแจ้งเตือน
+  var unread = 0;           // ข้อความที่ยังไม่ได้อ่านตอนอยู่แท็บอื่น
   var audio = {};           // id -> {el, ctx, analyser, data, talking}
   var rawStream = null;     // เสียงดิบจากไมค์
   var localStream = null;   // เสียงที่ส่งออกไปจริง (ผ่าน noise gate แล้ว)
@@ -359,6 +371,18 @@
     var backMsg = sessionStorage.getItem("mr_msg");
     if(backMsg){ sessionStorage.removeItem("mr_msg"); showErr(backMsg); }
   }catch(e){}
+
+  // เข้ามาจากลิงก์ชวน -> เติมชื่อห้องให้เลย เหลือแค่ใส่ชื่อตัวเอง
+  (function(){
+    var m = /[#&]room=([^&]+)/.exec(location.hash || "");
+    if(!m) return;
+    try{
+      var r = decodeURIComponent(m[1]).slice(0, 32);
+      if(r){ $("fRoom").value = r; setTimeout(function(){ $("fName").focus(); }, 0); }
+    }catch(e){}
+  })();
+
+  soundOn = store("mr_sound") !== "0";
   $("btnJoin").addEventListener("click", join);
   $("fRoom").addEventListener("keydown", function(e){ if(e.key==="Enter") join(); });
   $("fName").addEventListener("keydown", function(e){ if(e.key==="Enter") $("fRoom").focus(); });
@@ -839,6 +863,35 @@
   }
   requestAnimationFrame(tick);
 
+  // ---------------------------------------------------------------- แจ้งเตือน
+  // สร้างเสียงเองด้วย oscillator จะได้ไม่ต้องแนบไฟล์เสียงมาในไฟล์เดียว
+  function beep(notes){
+    if(!soundOn || !ac) return;
+    try{
+      if(ac.state === "suspended") ac.resume();
+      var t0 = ac.currentTime;
+      notes.forEach(function(n, i){
+        var o = ac.createOscillator(), g = ac.createGain();
+        o.type = "sine"; o.frequency.value = n;
+        var at = t0 + i * 0.09;
+        g.gain.setValueAtTime(0, at);
+        g.gain.linearRampToValueAtTime(0.06, at + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.13);
+        o.connect(g); g.connect(ac.destination);
+        o.start(at); o.stop(at + 0.15);
+      });
+    }catch(e){}
+  }
+
+  function updateTitle(){
+    var base = inRoom ? ("Campfire — " + roomLabel) : "Campfire — ห้องคุยเสียง";
+    document.title = (unread > 0 ? "(" + unread + ") " : "") + base;
+  }
+
+  document.addEventListener("visibilitychange", function(){
+    if(!document.hidden){ unread = 0; updateTitle(); }
+  });
+
   // ---------------------------------------------------------------- chat
   // ข้อความวิ่งตรงถึงทุกคนผ่านสายของตัวเอง ไม่มีใครเป็นตัวกลาง ไม่เก็บลงที่ไหน
   function openChat(id){
@@ -903,6 +956,7 @@
   }
 
   function addMsg(id, name, text, ts){
+    if(id !== me.id && document.hidden){ unread++; updateTitle(); beep([760]); }
     var box = $("msgs");
     var e = $("chatEmpty"); if(e) e.remove();
     var near = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
@@ -947,12 +1001,16 @@
     if(!rosterReady) return;                      // ยังไม่ซิงก์ อย่าเพิ่งบอกว่าใครเข้าใครออก
     if(prevIds === null){ prevIds = ids; return; } // รายชื่อชุดแรก = จุดตั้งต้น
     ids.forEach(function(id){
-      if(id !== me.id && prevIds.indexOf(id) === -1) addNotice((nameCache[id] || "ใครบางคน") + " เข้าห้อง");
+      if(id !== me.id && prevIds.indexOf(id) === -1){
+        addNotice((nameCache[id] || "ใครบางคน") + " เข้าห้อง");
+        beep([620, 880]);
+      }
     });
     prevIds.forEach(function(id){
       if(id === me.id || ids.indexOf(id) !== -1) return;
       var who = nameCache[id] || "ใครบางคน";
       addNotice(who + (kickedIds[id] ? " ถูกเชิญออกจากห้อง" : " ออกจากห้อง"));
+      beep([720, 480]);
       delete kickedIds[id];
     });
     prevIds = ids;
@@ -975,6 +1033,7 @@
     $("meter").classList.toggle("closed", gateOn && !gateIsOpen);
   }
   function paintGateUI(){
+    $("soundOn").checked = soundOn;
     $("gateOn").checked = gateOn;
     $("gateThresh").value = gateThresh;
     $("meterMark").style.left = meterPos(gateThresh).toFixed(1) + "%";
@@ -984,6 +1043,12 @@
   gateOn = store("mr_gate") !== "0";
   var savedThresh = parseFloat(store("mr_gate_th"));
   if(savedThresh > 0) gateThresh = savedThresh;
+
+  $("soundOn").addEventListener("change", function(){
+    soundOn = $("soundOn").checked;
+    store("mr_sound", soundOn ? "1" : "0");
+    if(soundOn) beep([880]);
+  });
 
   $("gateOn").addEventListener("change", function(){
     gateOn = $("gateOn").checked;
@@ -1003,7 +1068,34 @@
     inRoom = true;
     document.body.classList.add("in-room");
     $("roomName").textContent = roomLabel;
+    setupInviteLink();
+    updateTitle();
     render();
+  }
+
+  // ลิงก์ชวนเข้าห้องจะมีประโยชน์ก็ต่อเมื่อหน้านี้ถูกเสิร์ฟผ่านเว็บจริง ๆ
+  // ถ้าเปิดจากไฟล์ในเครื่อง ลิงก์จะชี้ไปที่ path ในเครื่องตัวเอง ส่งให้ใครก็เปิดไม่ได้
+  function setupInviteLink(){
+    var web = /^https?:$/.test(location.protocol);
+    try{ history.replaceState(null, "", "#room=" + encodeURIComponent(roomLabel)); }catch(e){}
+    var b = $("btnLink");
+    if(!web){
+      $("linkHint").textContent = "เปิดจากไฟล์ในเครื่องอยู่ เลยยังไม่มีลิงก์ให้ชวนเพื่อน — เอาไฟล์ไปวางบนเว็บก่อนถึงจะแชร์ลิงก์ได้";
+      return;
+    }
+    b.hidden = false;
+    b.addEventListener("click", function(){
+      var url = location.href;
+      var done = function(){
+        b.textContent = "คัดลอกแล้ว"; b.classList.add("done");
+        setTimeout(function(){ b.textContent = "คัดลอกลิงก์"; b.classList.remove("done"); }, 2000);
+      };
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(url).then(done, function(){ addNotice("คัดลอกไม่ได้ — ลิงก์คือ " + url); });
+      } else {
+        addNotice("ลิงก์ชวนเพื่อน: " + url);
+      }
+    });
   }
 
   function setConn(ok){
