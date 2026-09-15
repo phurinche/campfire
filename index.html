@@ -23,6 +23,12 @@
   input,select{font:inherit}
   .wrap{max-width:720px;margin:0 auto;padding:24px 16px 40px}
 
+  /* ในห้อง = แอปเต็มจอ ไม่เลื่อนทั้งหน้า ให้แชทกินพื้นที่ที่เหลือทั้งหมด */
+  body.in-room{height:100dvh;overflow:hidden}
+  body.in-room .wrap{height:100%;display:flex;flex-direction:column;padding:12px 16px 0}
+  body.in-room #join{display:none}
+  body.in-room #room{display:flex;flex-direction:column;flex:1;min-height:0}
+
   /* ---- join screen ---- */
   .hero{text-align:center;padding:36px 0 26px}
   .flame{font-size:40px;line-height:1;margin-bottom:8px;
@@ -54,19 +60,21 @@
 
   /* ---- room screen ---- */
   #room{display:none}
-  .roombar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-    background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:14px}
+  .roombar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:none;
+    background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:10px}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--tx2);flex:none}
   .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
   .dot.bad{background:var(--red)}
   .rname{font-weight:700}
   .rmeta{color:var(--tx2);font-size:13px;margin-left:auto}
 
-  ul.people{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:8px}
-  li.person{display:flex;align-items:center;gap:12px;background:var(--bg2);
-    border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:border-color .12s}
+  /* รายชื่อไม่ยาวเกิน ~3 แถว แล้วเลื่อนเอา ที่เหลือยกให้แชท */
+  ul.people{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px;
+    flex:none;max-height:31vh;overflow-y:auto;overscroll-behavior:contain}
+  li.person{display:flex;align-items:center;gap:10px;background:var(--bg2);
+    border:1px solid var(--line);border-radius:10px;padding:7px 12px;transition:border-color .12s}
   li.person.talking{border-color:var(--accent)}
-  .av{width:38px;height:38px;border-radius:50%;flex:none;display:grid;place-items:center;
+  .av{width:32px;height:32px;font-size:13px;border-radius:50%;flex:none;display:grid;place-items:center;
       font-weight:700;color:#fff;box-shadow:0 0 0 0 rgba(255,140,66,0);transition:box-shadow .12s}
   li.person.talking .av{box-shadow:0 0 0 3px rgba(255,140,66,.85), 0 0 16px rgba(255,140,66,.45)}
   .pname{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -75,11 +83,16 @@
   .icon{width:18px;height:18px;flex:none}
   .muted-i{color:var(--red)}
   .vol{width:80px}
+  .kick{border:1px solid var(--line);background:transparent;color:var(--tx2);
+        border-radius:7px;padding:3px 8px;font-size:12px;line-height:1.4;white-space:nowrap;
+        transition:background .12s,color .12s,border-color .12s}
+  .kick:hover{color:#ffb4b6;border-color:rgba(229,72,77,.5)}
+  .kick.arm{background:var(--red);border-color:var(--red);color:#fff;font-weight:700}
 
   /* ---- chat ---- */
   .chat{background:var(--bg2);border:1px solid var(--line);border-radius:12px;
-        margin-bottom:14px;overflow:hidden}
-  .msgs{max-height:36vh;min-height:130px;overflow-y:auto;padding:12px 14px;
+        overflow:hidden;flex:1;min-height:0;display:flex;flex-direction:column}
+  .msgs{flex:1;min-height:0;overflow-y:auto;padding:12px 14px;
         display:flex;flex-direction:column;gap:9px;overscroll-behavior:contain}
   .empty{color:var(--tx2);font-size:13px;text-align:center;margin:auto;padding:12px 0}
   .msg{font-size:14px;line-height:1.55;word-wrap:break-word;overflow-wrap:anywhere}
@@ -87,7 +100,7 @@
   .msg .at{color:var(--tx2);font-size:11px;margin-left:6px}
   .msg.mine .body{color:var(--tx)}
   .notice{color:var(--tx2);font-size:12px;text-align:center;font-style:italic}
-  .chatrow{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--bg3)}
+  .chatrow{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--bg3);flex:none}
   .chatrow input{flex:1;min-width:0;padding:10px 12px;border-radius:8px;
                  border:1px solid var(--line);background:var(--bg2);color:var(--tx);outline:none}
   .chatrow input:focus{border-color:var(--accent)}
@@ -96,16 +109,20 @@
   .send:hover{filter:brightness(1.1)}
   .send svg{width:18px;height:18px}
 
-  .controls{position:sticky;bottom:0;display:flex;gap:10px;justify-content:center;
-    background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:12px}
-  .cbtn{width:54px;height:54px;border-radius:50%;border:0;background:var(--bg3);
+  /* แถวปุ่มเป็น footer ติดล่างจอ */
+  .bar{flex:none;padding:10px 0 calc(10px + var(--safe-b))}
+  .controls{display:flex;gap:10px;justify-content:center;
+    background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:10px}
+  .cbtn{width:50px;height:50px;border-radius:50%;border:0;background:var(--bg3);
     display:grid;place-items:center;transition:background .15s,transform .1s}
   .cbtn:hover{background:#3d352e}
   .cbtn:active{transform:scale(.94)}
   .cbtn.off{background:var(--red)}
   .cbtn.leave{background:var(--red)}
   .cbtn svg{width:24px;height:24px}
-  .panel{margin-top:12px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .panel{margin-bottom:10px;background:var(--bg2);border:1px solid var(--line);
+    border-radius:12px;padding:12px 14px;max-height:52vh;overflow-y:auto}
+  .cbtn.on{background:var(--accent);color:#2a1405}
   .devrow{display:flex;gap:8px;align-items:center}
   .devrow select{flex:1;min-width:0}
   .gaterow{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
@@ -121,6 +138,12 @@
   .meter.closed .meter-fill{filter:grayscale(1) brightness(.6)}
   .gatehint{color:var(--tx2);font-size:12px;margin:8px 0 0;line-height:1.6}
   .gaterow.off .meter,.gaterow.off .devrow,.gaterow.off .gatehint{opacity:.4;pointer-events:none}
+  .overlay{position:fixed;inset:0;background:rgba(15,13,12,.92);z-index:50;
+    display:grid;place-items:center;padding:24px}
+  .overlay-box{background:var(--bg2);border:1px solid var(--line);border-radius:14px;
+    padding:24px;max-width:380px;width:100%;text-align:center}
+  .overlay-t{font-size:19px;font-weight:700;margin:0 0 8px}
+  .overlay-s{color:var(--tx2);font-size:14px;margin:0 0 18px;line-height:1.6}
   .foot{color:var(--tx2);font-size:12px;text-align:center;margin-top:18px;line-height:1.7}
   @media (max-width:420px){ .vol{width:56px} }
 </style>
@@ -175,36 +198,35 @@
       </form>
     </div>
 
-    <div class="controls">
-      <button class="cbtn" id="btnMic" title="เปิด/ปิดไมค์ (กด M)"></button>
-      <button class="cbtn" id="btnDeaf" title="ปิดเสียงทุกคน (กด D)"></button>
-      <button class="cbtn leave" id="btnLeave" title="ออกจากห้อง"></button>
-    </div>
-
-    <div class="panel">
-      <div class="devrow">
-        <label for="micSel" style="margin:0">ไมค์</label>
-        <select id="micSel"></select>
-      </div>
-
-      <div class="gaterow">
-        <label class="chk"><input type="checkbox" id="gateOn" checked> ตัดเสียงรบกวนตอนไม่ได้พูด</label>
-        <div class="meter" id="meter" title="แถบสีคือเสียงจากไมค์ตอนนี้ · ขีดคือเกณฑ์">
-          <div class="meter-fill" id="meterFill"></div>
-          <div class="meter-mark" id="meterMark"></div>
-        </div>
+    <footer class="bar">
+      <div class="panel" id="settings" hidden>
         <div class="devrow">
-          <label for="gateThresh" style="margin:0;white-space:nowrap">ความไว</label>
-          <input type="range" id="gateThresh" min="0.005" max="0.15" step="0.005" style="flex:1">
+          <label for="micSel" style="margin:0">ไมค์</label>
+          <select id="micSel"></select>
         </div>
-        <p class="gatehint">พูดตามปกติแล้วดูแถบด้านบน — ตั้งขีดให้อยู่เหนือเสียงพื้นหลัง แต่ต่ำกว่าตอนคุณพูด</p>
-      </div>
-    </div>
 
-    <p class="foot">
-      ปุ่มลัด: <b>M</b> เปิด/ปิดไมค์ &nbsp;·&nbsp; <b>D</b> ปิดเสียงทุกคน<br>
-      กองไฟดับเมื่อคนสุดท้ายออกจากห้อง — ไม่มีอะไรถูกเก็บไว้ที่ไหน
-    </p>
+        <div class="gaterow">
+          <label class="chk"><input type="checkbox" id="gateOn" checked> ตัดเสียงรบกวนตอนไม่ได้พูด</label>
+          <div class="meter" id="meter" title="แถบสีคือเสียงจากไมค์ตอนนี้ · ขีดคือเกณฑ์">
+            <div class="meter-fill" id="meterFill"></div>
+            <div class="meter-mark" id="meterMark"></div>
+          </div>
+          <div class="devrow">
+            <label for="gateThresh" style="margin:0;white-space:nowrap">ความไว</label>
+            <input type="range" id="gateThresh" min="0.005" max="0.15" step="0.005" style="flex:1">
+          </div>
+          <p class="gatehint">พูดตามปกติแล้วดูแถบด้านบน — ตั้งขีดให้อยู่เหนือเสียงพื้นหลัง แต่ต่ำกว่าตอนคุณพูด</p>
+          <p class="gatehint">ปุ่มลัด: <b>M</b> เปิด/ปิดไมค์ &nbsp;·&nbsp; <b>D</b> ปิดเสียงทุกคน</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="cbtn" id="btnMic" title="เปิด/ปิดไมค์ (กด M)"></button>
+        <button class="cbtn" id="btnDeaf" title="ปิดเสียงทุกคน (กด D)"></button>
+        <button class="cbtn" id="btnGear" title="ตั้งค่า"></button>
+        <button class="cbtn leave" id="btnLeave" title="ออกจากห้อง"></button>
+      </div>
+    </footer>
   </div>
 
 </div>
@@ -249,6 +271,12 @@
   var nameCache = {};       // id -> ชื่อล่าสุด ไว้บอกตอนใครออกจากห้อง
   var prevIds = null;       // รายชื่อรอบก่อน ไว้เทียบหาคนเข้า/ออก
   var rosterReady = false;  // ได้รายชื่อชุดแรกที่ซิงก์แล้วหรือยัง
+  var inRoom = false;       // เข้าห้องแล้วหรือยัง
+  var banned = {};          // เจ้าของห้องเท่านั้น: id ที่ถูกเชิญออก ห้ามกลับเข้ามาซ้ำ
+  var armedKick = null;     // id ที่กดไล่ออกไว้รอบแรก รอยืนยัน
+  var armTimer = null;
+  var kickedIds = {};       // ไว้บอกว่า "ถูกเชิญออก" แทน "ออกจากห้อง"
+  var lastSig = "";         // ลายเซ็นรายชื่อ ไว้กันวาดใหม่ทั้งที่ไม่มีอะไรเปลี่ยน
   var audio = {};           // id -> {el, ctx, analyser, data, talking}
   var rawStream = null;     // เสียงดิบจากไมค์
   var localStream = null;   // เสียงที่ส่งออกไปจริง (ผ่าน noise gate แล้ว)
@@ -297,6 +325,7 @@
     spk:'<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>',
     spkOff:'<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/></svg>',
     leave:'<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/><path d="M17 16l4-4-4-4"/><path d="M21 12H9"/></svg>',
+    gear:'<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
     send:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>'
   };
 
@@ -441,8 +470,16 @@
       addMsg(from, nm, m.text.slice(0, 500), typeof m.ts === "number" ? m.ts : Date.now());
       return;
     }
+    if(m.t === "kicked"){
+      if(!amHost) showKicked();
+      return;
+    }
     if(m.t === "hello" || m.t === "state" || m.t === "ping"){
       if(!amHost) return;
+      if(banned[conn.peer]){                       // ถูกเชิญออกแล้ว ไม่ให้กลับเข้ามาซ้ำ
+        try{ conn.send({ t:"kicked" }); conn.close(); }catch(e){}
+        return;
+      }
       var id = conn.peer;
       memberSeen[id] = Date.now();
       memberConns[id] = conn;
@@ -755,7 +792,10 @@
       if(id !== me.id && prevIds.indexOf(id) === -1) addNotice((nameCache[id] || "ใครบางคน") + " เข้าห้อง");
     });
     prevIds.forEach(function(id){
-      if(id !== me.id && ids.indexOf(id) === -1) addNotice((nameCache[id] || "ใครบางคน") + " ออกจากห้อง");
+      if(id === me.id || ids.indexOf(id) !== -1) return;
+      var who = nameCache[id] || "ใครบางคน";
+      addNotice(who + (kickedIds[id] ? " ถูกเชิญออกจากห้อง" : " ออกจากห้อง"));
+      delete kickedIds[id];
     });
     prevIds = ids;
   }
@@ -772,7 +812,7 @@
   function meterPos(v){ return Math.max(0, Math.min(1, Math.sqrt(v / 0.3))) * 100; }
 
   function paintMeter(lvl){
-    if($("room").style.display === "none") return;
+    if(!inRoom) return;
     $("meterFill").style.width = meterPos(lvl).toFixed(1) + "%";
     $("meter").classList.toggle("closed", gateOn && !gateIsOpen);
   }
@@ -801,8 +841,9 @@
 
   // ---------------------------------------------------------------- UI
   function enterRoom(){
-    $("join").style.display = "none";
-    $("room").style.display = "block";
+    if(inRoom) return;
+    inRoom = true;
+    document.body.classList.add("in-room");
     $("roomName").textContent = roomLabel;
     render();
   }
@@ -817,13 +858,21 @@
   }
 
   function render(){
-    if($("room").style.display === "none") return;
+    if(!inRoom) return;
     noticeRosterChanges();
     setConn(amHost || (hostConn && hostConn.open));
     var ul = $("people");
     var ids = Object.keys(roster);
     if(ids.indexOf(me.id) === -1) ids.push(me.id);
     ids.sort(function(a,b){ return a===me.id ? -1 : b===me.id ? 1 : (a<b?-1:1); });
+
+    // วาดใหม่เฉพาะตอนมีอะไรเปลี่ยนจริง ไม่งั้นสไลเดอร์กับปุ่มจะถูกสร้างใหม่ทุก 3 วิ
+    var sig = ids.map(function(id){
+      var q = roster[id] || {};
+      return id + "\u0001" + (q.name || "") + (q.muted ? "1" : "0") + (media[id] ? "1" : "0");
+    }).join("\u0002") + "\u0003" + amHost + "\u0003" + armedKick;
+    if(sig === lastSig){ paintTalking(); paintButtons(); return; }
+    lastSig = sig;
 
     ul.innerHTML = "";
     ids.forEach(function(id){
@@ -845,6 +894,24 @@
       var st = document.createElement("div");
       st.className = "pstat";
       if(p.muted){ var m=document.createElement("span"); m.className="muted-i"; m.innerHTML=SVG.micOff; st.appendChild(m); }
+      if(!isMe && amHost){
+        (function(pid, pname){
+          var k = document.createElement("button");
+          k.type = "button";
+          k.className = "kick" + (armedKick === pid ? " arm" : "");
+          k.textContent = armedKick === pid ? "ยืนยัน?" : "ไล่ออก";
+          k.title = "เชิญ " + pname + " ออกจากห้อง";
+          k.addEventListener("click", function(){
+            clearTimeout(armTimer);
+            if(armedKick === pid){ armedKick = null; kick(pid); return; }
+            armedKick = pid; render();
+            armTimer = setTimeout(function(){
+              if(armedKick === pid){ armedKick = null; render(); }
+            }, 4000);
+          });
+          st.appendChild(k);
+        })(id, p.name);
+      }
       if(!isMe){
         var v = document.createElement("input");
         v.type="range"; v.className="vol"; v.min=0; v.max=1; v.step=0.05;
@@ -882,6 +949,55 @@
     d.classList.toggle("off", deafened);
     $("btnLeave").innerHTML = SVG.leave;
     $("chatSend").innerHTML = SVG.send;
+    var g = $("btnGear");
+    g.innerHTML = SVG.gear;
+    g.classList.toggle("on", !$("settings").hidden);
+  }
+
+  // ---------------------------------------------------------------- kick (เจ้าของห้องเท่านั้น)
+  function kick(id){
+    if(!amHost || id === me.id) return;
+    var nm = (roster[id] && roster[id].name) || nameCache[id] || "ใครบางคน";
+    banned[id] = true;
+    kickedIds[id] = true;
+    var c = memberConns[id];
+    try{ if(c && c.open) c.send({ t:"kicked" }); }catch(e){}
+    setTimeout(function(){ try{ if(c) c.close(); }catch(e){} }, 400);
+    delete memberConns[id]; delete memberSeen[id]; delete roster[id];
+    teardown(id);
+    if(chatConns[id]){ try{ chatConns[id].close(); }catch(e){} delete chatConns[id]; }
+    broadcastRoster(); render();
+  }
+
+  // ฝั่งคนที่ถูกเชิญออก: ตัดทุกสาย แล้วขึ้นหน้าบอก ไม่ต่อกลับเอง
+  function showKicked(){
+    if(leaving) return;
+    leaving = true;
+    try{ Object.keys(media).forEach(function(id){ media[id].close(); }); }catch(e){}
+    try{ Object.keys(chatConns).forEach(function(id){ chatConns[id].close(); }); }catch(e){}
+    try{ if(hostConn) hostConn.close(); }catch(e){}
+    try{ if(selfPeer) selfPeer.destroy(); }catch(e){}
+    try{ if(rawStream) rawStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+
+    var ov = document.createElement("div");
+    ov.className = "overlay";
+    var box = document.createElement("div");
+    box.className = "overlay-box";
+    var h = document.createElement("p");
+    h.className = "overlay-t"; h.textContent = "คุณถูกเชิญออกจากห้อง";
+    var s = document.createElement("p");
+    s.className = "overlay-s"; s.textContent = "เจ้าของห้องเป็นคนเชิญออก เข้าห้องเดิมซ้ำไม่ได้จนกว่าเขาจะปิดห้อง";
+    var b = document.createElement("button");
+    b.className = "btn"; b.textContent = "กลับหน้าแรก";
+    b.addEventListener("click", function(){ location.reload(); });
+    box.appendChild(h); box.appendChild(s); box.appendChild(b);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+  }
+
+  function toggleSettings(){
+    $("settings").hidden = !$("settings").hidden;
+    paintButtons();
   }
 
   function applyMute(){
@@ -914,9 +1030,10 @@
 
   $("btnMic").addEventListener("click", toggleMic);
   $("btnDeaf").addEventListener("click", toggleDeaf);
+  $("btnGear").addEventListener("click", toggleSettings);
   $("btnLeave").addEventListener("click", leave);
   document.addEventListener("keydown", function(e){
-    if($("room").style.display === "none") return;
+    if(!inRoom) return;
     if(e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     if(e.key === "m" || e.key === "M" || e.key === "ษ"){ e.preventDefault(); toggleMic(); }
     if(e.key === "d" || e.key === "D" || e.key === "ก"){ e.preventDefault(); toggleDeaf(); }
