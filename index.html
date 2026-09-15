@@ -567,15 +567,28 @@
       Object.keys(roster).forEach(function(id){
         if(id === me.id) return;
         var seen = memberSeen[id] || 0;
-        if(now - seen > 12000){ delete roster[id]; delete memberConns[id]; delete memberSeen[id]; dropped = true; }
+        var conn = memberConns[id];
+        // สายปิดแล้วจริง ๆ (มี event ยืนยัน) = ตัดได้เร็ว
+        // ส่วนการ "เงียบไป" ใช้เวลานานกว่ามาก เพราะแท็บที่ไม่ได้อยู่หน้าจอ
+        // จะโดนเบราว์เซอร์หรี่ setInterval ทิ้ง ping ไม่ได้แปลว่าเขาหลุด
+        var cpc = conn && conn.peerConnection;
+        var cst = cpc && (cpc.connectionState || cpc.iceConnectionState);
+        var closed = !conn || conn.open === false || cst === "failed" || cst === "closed";
+        if((closed && now - seen > 8000) || now - seen > 60000){
+          delete roster[id]; delete memberConns[id]; delete memberSeen[id]; dropped = true;
+        }
       });
       broadcastRoster();
       if(dropped){ render(); reconcile(); }
     } else {
       if(hostConn && hostConn.open){
+        // สถานะสายจริง ๆ เชื่อถือได้กว่านาฬิกาของเรา เพราะไม่โดนเบราว์เซอร์หรี่
+        var hpc = hostConn.peerConnection;
+        var hst = hpc && (hpc.connectionState || hpc.iceConnectionState);
+        if(hst === "failed" || hst === "closed"){ lastRosterAt = 0; onHostLost(); return; }
         try{ hostConn.send({ t:"ping", id:me.id, name:me.name, muted:me.muted }); }catch(e){}
         if(!lastRosterAt) lastRosterAt = now;
-        if(now - lastRosterAt > 11000){ lastRosterAt = 0; onHostLost(); return; }
+        if(now - lastRosterAt > 45000){ lastRosterAt = 0; onHostLost(); return; }
       } else {
         connectToHost();
       }
@@ -601,17 +614,22 @@
     if(media[id] || !localStream) return;
     try{
       var call = selfPeer.call(id, localStream, { metadata:{ name:me.name } });
-      if(call) wireCall(call);
+      if(call) wireCall(call, true);
     }catch(e){}
   }
 
-  function wireCall(call){
+  function wireCall(call, outgoing){
     var id = call.peer;
     if(media[id] && media[id] !== call){ try{ media[id].close(); }catch(e){} }
     media[id] = call;
-    call.on("stream", function(stream){ attachAudio(id, stream); });
+    var flowing = false;
+    call.on("stream", function(stream){ flowing = true; attachAudio(id, stream); });
     call.on("close", function(){ if(media[id] === call) teardown(id); });
     call.on("error", function(){ if(media[id] === call) teardown(id); });
+    // เหตุผลเดียวกับสายแชท: สายที่ต่อไม่ติดต้องถูกทิ้ง ไม่งั้นบล็อกการต่อใหม่ถาวร
+    setTimeout(function(){
+      if(outgoing && !flowing && media[id] === call) teardown(id);
+    }, 15000);
   }
 
   function teardown(id){
@@ -739,17 +757,27 @@
     if(chatConns[id] || !selfPeer) return;
     try{
       var c = selfPeer.connect(id, { reliable:true, metadata:{ kind:"chat" } });
-      if(c) wireChat(c);
+      if(c) wireChat(c, true);
     }catch(e){}
   }
 
-  function wireChat(conn){
+  function wireChat(conn, outgoing){
     var id = conn.peer;
     if(chatConns[id] && chatConns[id] !== conn){ try{ chatConns[id].close(); }catch(e){} }
     chatConns[id] = conn;
+    var opened = false;
+    conn.on("open", function(){ opened = true; });
     conn.on("data", function(m){ onData(conn, m, "chat"); });
     conn.on("close", function(){ if(chatConns[id] === conn) delete chatConns[id]; });
     conn.on("error", function(){ if(chatConns[id] === conn) delete chatConns[id]; });
+    // สายที่เปิดไม่ติดจะไม่ยิง close/error เสมอไป ถ้าปล่อยค้างไว้
+    // รอบ retry จะเห็นว่า "มีสายแล้ว" แล้วไม่ต่อใหม่ = แชทเงียบไปเลยแบบไม่มีสัญญาณ
+    setTimeout(function(){
+      if(outgoing && !opened && chatConns[id] === conn){
+        try{ conn.close(); }catch(e){}
+        delete chatConns[id];
+      }
+    }, 8000);
   }
 
   function sendChat(text){
